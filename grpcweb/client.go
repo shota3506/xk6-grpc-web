@@ -36,23 +36,17 @@ type methodInfo struct {
 type client struct {
 	vu modules.VU
 
-	httpClient *http.Client
-
 	// load
 	mds map[string]protoreflect.MethodDescriptor
 
 	// connect
-	addr string
+	addr       string
+	httpClient *http.Client
 }
 
 func newClient(vu modules.VU) *client {
-	transport := &http.Transport{
-		Proxy:        http.ProxyFromEnvironment,
-		MaxIdleConns: 1,
-	}
 	return &client{
-		vu:         vu,
-		httpClient: &http.Client{Transport: transport},
+		vu: vu,
 	}
 }
 
@@ -99,6 +93,13 @@ func (c *client) Connect(addr string) (bool, error) {
 	}
 
 	c.addr = addr
+	c.httpClient = &http.Client{
+		Transport: &http.Transport{
+			DialContext:  c.vu.State().Dialer.DialContext,
+			Proxy:        http.ProxyFromEnvironment,
+			MaxIdleConns: 1,
+		},
+	}
 
 	return true, nil
 
