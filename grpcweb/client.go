@@ -12,6 +12,7 @@ import (
 	"github.com/grafana/sobek"
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/desc/protoparse"
+	"github.com/mstoykov/k6-taskqueue-lib/taskqueue"
 	"go.k6.io/k6/js/common"
 	"go.k6.io/k6/js/modules"
 	"go.k6.io/k6/metrics"
@@ -208,6 +209,7 @@ func (c *client) Stream(method string, req, params sobek.Value) (*sobek.Object, 
 		client:         client,
 		md:             md,
 		eventListeners: newEventListeners(),
+		tq:             taskqueue.New(c.vu.RegisterCallback),
 	}
 
 	if err := s.begin(connectReq); err != nil {

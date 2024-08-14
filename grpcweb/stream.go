@@ -3,9 +3,11 @@ package grpcweb
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	"connectrpc.com/connect"
 	"github.com/grafana/sobek"
+	"github.com/mstoykov/k6-taskqueue-lib/taskqueue"
 	"go.k6.io/k6/js/common"
 	"go.k6.io/k6/js/modules"
 	"google.golang.org/grpc/codes"
@@ -20,48 +22,55 @@ const (
 )
 
 type eventListeners struct {
-	listeners map[string]*eventListener
+	mu        sync.RWMutex
+	listeners map[string][]func(sobek.Value) (sobek.Value, error)
 }
 
 func newEventListeners() *eventListeners {
 	return &eventListeners{
-		listeners: map[string]*eventListener{
-			eventTypeData:  newEventListener(),
-			eventTypeError: newEventListener(),
-			eventTypeEnd:   newEventListener(),
+		listeners: map[string][]func(sobek.Value) (sobek.Value, error){
+			eventTypeData:  {},
+			eventTypeError: {},
+			eventTypeEnd:   {},
 		},
 	}
 }
 
 func (els *eventListeners) add(eventType string, fn func(sobek.Value) (sobek.Value, error)) error {
-	if _, ok := els.listeners[eventType]; !ok {
+	els.mu.Lock()
+	defer els.mu.Unlock()
+
+	listeners, ok := els.listeners[eventType]
+	if !ok {
 		return fmt.Errorf("unsupported event type: %s", eventType)
 	}
-	els.listeners[eventType].add(fn)
+	els.listeners[eventType] = append(listeners, fn)
 	return nil
 }
 
-type eventListener struct {
-	list []func(sobek.Value) (sobek.Value, error)
-}
+func (els *eventListeners) all(eventType string) func(yield func(int, func(sobek.Value) (sobek.Value, error)) bool) {
+	return func(yield func(int, func(sobek.Value) (sobek.Value, error)) bool) {
+		els.mu.RLock()
+		defer els.mu.RUnlock()
 
-func newEventListener() *eventListener {
-	return &eventListener{}
-}
-
-func (el *eventListener) add(fn func(sobek.Value) (sobek.Value, error)) {
-	el.list = append(el.list, fn)
+		for i, v := range els.listeners[eventType] {
+			if !yield(i, v) {
+				return
+			}
+		}
+	}
 }
 
 type stream struct {
-	vu     modules.VU
-	client *connect.Client[dynamicpb.Message, deferredMessage]
+	vu modules.VU
 
-	md protoreflect.MethodDescriptor
-
+	client         *connect.Client[dynamicpb.Message, deferredMessage]
+	md             protoreflect.MethodDescriptor
 	eventListeners *eventListeners
+	tq             *taskqueue.TaskQueue
 
 	stream *connect.ServerStreamForClient[deferredMessage]
+	done   chan struct{}
 }
 
 func (s *stream) On(eventType string, handler func(sobek.Value) (sobek.Value, error)) {
@@ -85,7 +94,8 @@ func (s *stream) begin(req *connect.Request[dynamicpb.Message]) error {
 
 	// start goroutine to handle stream events
 	go func() {
-		defer s.close()
+		defer s.tq.Close()
+		defer s.queueClose()
 
 		// read data
 		for s.stream.Receive() {
@@ -97,31 +107,35 @@ func (s *stream) begin(req *connect.Request[dynamicpb.Message]) error {
 				continue
 			}
 
-			if err := s.callback(message); err != nil {
-				s.vu.State().Logger.Errorf("%v", err)
-			}
+			s.queueCallback(message)
 		}
 
 		if err := s.stream.Err(); err != nil {
-			if err := s.errorCallback(err); err != nil {
-				s.vu.State().Logger.Errorf("%v", err)
+			var connectErr *connect.Error
+			if errors.As(err, &connectErr) {
+				s.queueError(connectErr)
+			} else {
+				s.vu.State().Logger.Errorf("unexpected error from server: %v", err)
 			}
 		}
+
 	}()
 
 	return nil
 }
 
-func (s *stream) callback(message map[string]any) error {
-	rt := s.vu.Runtime()
-	listeners := s.eventListeners.listeners[eventTypeData]
-
-	for _, listener := range listeners.list {
-		if _, err := listener(rt.ToValue(message)); err != nil {
-			return err
-		}
-	}
-	return nil
+func (s *stream) queueCallback(message map[string]any) {
+	s.tq.Queue(func() (err error) {
+		rt := s.vu.Runtime()
+		s.eventListeners.all(eventTypeData)(func(i int, f func(sobek.Value) (sobek.Value, error)) bool {
+			if _, err = f(rt.ToValue(message)); err != nil {
+				// quit the loop and return the error
+				return false
+			}
+			return true
+		})
+		return
+	})
 }
 
 type streamError struct {
@@ -130,35 +144,34 @@ type streamError struct {
 	Status       codes.Code
 }
 
-func (s *stream) errorCallback(err error) error {
-	var connectErr *connect.Error
-	if !errors.As(err, &connectErr) {
-		return err
-	}
-
-	rt := s.vu.Runtime()
-	listeners := s.eventListeners.listeners[eventTypeError]
-
-	for _, listener := range listeners.list {
-		if _, err := listener(rt.ToValue(&streamError{
-			Error:        connectErr.Message(),
-			ErrorDetails: connectErr.Details(),
-			Status:       codes.Code(uint32(connectErr.Code())),
-		})); err != nil {
-			return err
-		}
-	}
-	return nil
+func (s *stream) queueError(connectErr *connect.Error) {
+	s.tq.Queue(func() (err error) {
+		rt := s.vu.Runtime()
+		s.eventListeners.all(eventTypeError)(func(_ int, f func(sobek.Value) (sobek.Value, error)) bool {
+			if _, err = f(rt.ToValue(&streamError{
+				Error:        connectErr.Message(),
+				ErrorDetails: connectErr.Details(),
+				Status:       codes.Code(uint32(connectErr.Code())),
+			})); err != nil {
+				// quit the loop and return the error
+				return false
+			}
+			return true
+		})
+		return
+	})
 }
 
-func (s *stream) close() error {
-	rt := s.vu.Runtime()
-	listeners := s.eventListeners.listeners[eventTypeEnd]
-
-	for _, listener := range listeners.list {
-		if _, err := listener(rt.ToValue(struct{}{})); err != nil {
-			return err
-		}
-	}
-	return nil
+func (s *stream) queueClose() {
+	s.tq.Queue(func() (err error) {
+		rt := s.vu.Runtime()
+		s.eventListeners.all(eventTypeEnd)(func(_ int, f func(sobek.Value) (sobek.Value, error)) bool {
+			if _, err = f(rt.ToValue(struct{}{})); err != nil {
+				// quit the loop and return the error
+				return false
+			}
+			return true
+		})
+		return
+	})
 }

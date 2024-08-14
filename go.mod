@@ -6,6 +6,7 @@ require (
 	connectrpc.com/connect v1.16.2
 	github.com/grafana/sobek v0.0.0-20240613124309-cb36746e8fee
 	github.com/jhump/protoreflect v1.16.0
+	github.com/mstoykov/k6-taskqueue-lib v0.1.0
 	go.k6.io/k6 v0.52.0
 	google.golang.org/grpc v1.65.0
 	google.golang.org/protobuf v1.34.2
