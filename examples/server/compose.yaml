@@ -1,0 +1,12 @@
+services:
+  app:
+    build: .
+  envoy:
+    image: envoyproxy/envoy:v1.31.0
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml
+    depends_on:
+      app:
+        condition: service_started
