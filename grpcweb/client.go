@@ -3,6 +3,7 @@ package grpcweb
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -225,7 +226,7 @@ func (c *client) Invoke(method string, req sobek.Value, params sobek.Value) (*in
 		return nil, err
 	}
 
-	message, err := handleConnectResponse(md, resp.Msg.data)
+	message, err := convertMessageToJSON(md, resp.Msg.data)
 	if err != nil {
 		return nil, err
 	}
@@ -407,88 +408,21 @@ func walkFileDescriptors(seen map[string]struct{}, fd *desc.FileDescriptor) []*d
 	return fds
 }
 
-func handleConnectResponse(md protoreflect.MethodDescriptor, data []byte) (map[string]any, error) {
+func convertMessageToJSON(md protoreflect.MethodDescriptor, data []byte) (any, error) {
 	msg := dynamicpb.NewMessage(md.Output())
-
 	if err := proto.Unmarshal(data, msg); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unmarshal the message: %w", err)
 	}
 
-	result, err := dynamicMessageToMap(data, msg)
+	marshaler := protojson.MarshalOptions{EmitUnpopulated: true}
+	raw, err := marshaler.Marshal(msg)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal the message into JSON: %w", err)
 	}
 
-	return result, nil
-}
-
-func dynamicMessageToMap(in []byte, msg *dynamicpb.Message) (map[string]any, error) {
-	err := proto.Unmarshal(in, msg)
-	if err != nil {
-		return nil, err
+	var resp any
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal the JSON message: %w", err)
 	}
-
-	content, err := innerDynamicMessageToMap(msg)
-	if err != nil {
-		return nil, err
-	}
-
-	if content, ok := content.(map[string]any); ok {
-		return content, nil
-	}
-
-	return nil, fmt.Errorf("failed to convert dynamic message to map")
-}
-
-func innerDynamicMessageToMap(msg protoreflect.Message) (any, error) {
-	mapData := make(map[string]any, msg.Descriptor().Fields().Len())
-
-	for i := 0; i < msg.Descriptor().Fields().Len(); i++ {
-		field := msg.Descriptor().Fields().Get(i)
-		switch field.Cardinality() {
-		case protoreflect.Repeated:
-			list := msg.Get(field).List()
-			values := make([]any, 0, list.Len())
-			for j := 0; j < list.Len(); j++ {
-				v, err := fieldToValue(field.Kind(), list.Get(j))
-				if err != nil {
-					return nil, err
-				}
-				values = append(values, v)
-			}
-			mapData[string(field.Name())] = values
-		default:
-			value, err := fieldToValue(field.Kind(), msg.Get(field))
-			if err != nil {
-				return nil, err
-			}
-			mapData[string(field.Name())] = value
-		}
-	}
-	return mapData, nil
-}
-
-func fieldToValue(kind protoreflect.Kind, value protoreflect.Value) (any, error) {
-	switch kind {
-	case protoreflect.BoolKind:
-		return value.Bool(), nil
-	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
-		protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
-		return value.Int(), nil
-	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind,
-		protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
-		return value.Uint(), nil
-	case protoreflect.FloatKind, protoreflect.DoubleKind:
-		return value.Float(), nil
-	case protoreflect.StringKind:
-		return value.String(), nil
-	case protoreflect.BytesKind:
-		return value.Bytes(), nil
-	case protoreflect.EnumKind:
-		return value.Enum(), nil
-	case protoreflect.MessageKind:
-		return innerDynamicMessageToMap(value.Message())
-	default:
-		return nil, fmt.Errorf("unsupported field type: %s", kind)
-	}
+	return resp, nil
 }

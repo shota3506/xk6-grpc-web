@@ -100,7 +100,7 @@ func (s *stream) begin(req *connect.Request[dynamicpb.Message]) error {
 		for s.stream.Receive() {
 			msg := s.stream.Msg()
 
-			message, err := handleConnectResponse(s.md, msg.data)
+			message, err := convertMessageToJSON(s.md, msg.data)
 			if err != nil {
 				s.vu.State().Logger.Errorf("failed to unmarshal message: %v", err)
 				continue
@@ -123,7 +123,7 @@ func (s *stream) begin(req *connect.Request[dynamicpb.Message]) error {
 	return nil
 }
 
-func (s *stream) queueCallback(message map[string]any) {
+func (s *stream) queueCallback(message any) {
 	s.tq.Queue(func() (err error) {
 		rt := s.vu.Runtime()
 		s.eventListeners.all(eventTypeData)(func(i int, f func(sobek.Value) (sobek.Value, error)) bool {
