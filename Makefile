@@ -1,6 +1,9 @@
 MAKEFLAGS += --silent
 
+all: clean lint test build
+
 ## help: Prints a list of available build targets.
+.PHONY: help
 help:
 	echo "Usage: make <OPTIONS> ... <TARGETS>"
 

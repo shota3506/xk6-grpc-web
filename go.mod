@@ -4,10 +4,12 @@ go 1.22
 
 require (
 	connectrpc.com/connect v1.16.2
+	connectrpc.com/grpcreflect v1.2.0
 	github.com/grafana/sobek v0.0.0-20240613124309-cb36746e8fee
 	github.com/jhump/protoreflect v1.16.0
 	github.com/mstoykov/k6-taskqueue-lib v0.1.0
 	go.k6.io/k6 v0.52.0
+	golang.org/x/net v0.28.0
 	google.golang.org/grpc v1.65.0
 	google.golang.org/protobuf v1.34.2
 )
@@ -46,7 +48,6 @@ require (
 	go.opentelemetry.io/otel/sdk v1.28.0 // indirect
 	go.opentelemetry.io/otel/trace v1.28.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.3.1 // indirect
-	golang.org/x/net v0.28.0 // indirect
 	golang.org/x/sync v0.8.0 // indirect
 	golang.org/x/sys v0.24.0 // indirect
 	golang.org/x/text v0.17.0 // indirect

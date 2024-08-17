@@ -1,5 +1,5 @@
-// Package grpc exist just to register the grpc extension
-package grpc
+// Package grpcweb provides a k6 extension for gRPC-Web.
+package grpcweb
 
 import (
 	"github.com/shota3506/xk6-grpc-web/grpcweb"

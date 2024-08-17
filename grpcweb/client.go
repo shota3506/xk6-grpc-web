@@ -1,14 +1,18 @@
 package grpcweb
 
 import (
+	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
 
 	"connectrpc.com/connect"
+	"connectrpc.com/grpcreflect"
 	"github.com/grafana/sobek"
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/desc/protoparse"
@@ -16,13 +20,13 @@ import (
 	"go.k6.io/k6/js/common"
 	"go.k6.io/k6/js/modules"
 	"go.k6.io/k6/metrics"
+	"golang.org/x/net/http2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
 )
@@ -41,13 +45,14 @@ type client struct {
 	mds map[string]protoreflect.MethodDescriptor
 
 	// connect
-	addr       string
+	addr       *url.URL
 	httpClient *http.Client
 }
 
 func newClient(vu modules.VU) *client {
 	return &client{
-		vu: vu,
+		vu:  vu,
+		mds: make(map[string]protoreflect.MethodDescriptor),
 	}
 }
 
@@ -85,26 +90,82 @@ func (c *client) Load(importPaths []string, filenames ...string) ([]methodInfo, 
 	for _, fd := range fds {
 		fdset.File = append(fdset.File, walkFileDescriptors(seen, fd)...)
 	}
-	return c.convertToMethodInfo(fdset)
+	return c.registerMethods(fdset)
 }
 
-func (c *client) Connect(addr string) (bool, error) {
+func (c *client) Connect(addr string, params sobek.Value) (bool, error) {
 	if state := c.vu.State(); state == nil {
 		return false, common.NewInitContextError("connecting to a gRPC Web server in the init context is not supported")
 	}
 
-	c.addr = addr
+	p, err := c.parseConnectParams(params)
+	if err != nil {
+		return false, err
+	}
+
+	c.addr, err = url.Parse(addr)
+	if err != nil {
+		return false, err
+	}
 	c.httpClient = &http.Client{
 		Transport: &http.Transport{
-			DialContext:  c.vu.State().Dialer.DialContext,
-			Proxy:        http.ProxyFromEnvironment,
-			MaxIdleConns: 1,
+			DialContext:       c.vu.State().Dialer.DialContext,
+			Proxy:             http.ProxyFromEnvironment,
+			MaxIdleConns:      1,
+			ForceAttemptHTTP2: false,
 		},
 	}
 
-	return true, nil
+	if !p.reflect {
+		return true, nil
+	}
 
-	// TODO: use reflection protocol
+	fdset, err := c.reflectServer(c.addr)
+	if err != nil {
+		return false, err
+	}
+	_, err = c.registerMethods(fdset)
+	if err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+func (c *client) reflectServer(addr *url.URL) (*descriptorpb.FileDescriptorSet, error) {
+	// use HTTP2 transport because gRPC server reflection service provides bidirectional streaming RPC
+	transport := &http2.Transport{}
+	if addr.Scheme != "https" {
+		var dialer net.Dialer
+		transport = &http2.Transport{
+			AllowHTTP: true,
+			DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
+				return dialer.DialContext(ctx, network, addr)
+			},
+		}
+	}
+
+	client := grpcreflect.NewClient(&http.Client{Transport: transport}, addr.String(),
+		connect.WithGRPCWeb(),
+	)
+
+	stream := client.NewStream(context.Background())
+	defer stream.Close()
+
+	names, err := stream.ListServices()
+	if err != nil {
+		return nil, err
+	}
+
+	fdset := &descriptorpb.FileDescriptorSet{}
+	for _, name := range names {
+		fds, err := stream.FileContainingSymbol(name)
+		if err != nil {
+			return nil, err
+		}
+		fdset.File = append(fdset.File, fds...)
+	}
+	return fdset, nil
 }
 
 type invokeResponse struct {
@@ -126,11 +187,7 @@ func (c *client) Invoke(method string, req sobek.Value, params sobek.Value) (*in
 		return nil, fmt.Errorf("request cannot be nil")
 	}
 
-	url, err := url.JoinPath(c.addr, method)
-	if err != nil {
-		return nil, err
-	}
-	client := connect.NewClient[dynamicpb.Message, deferredMessage](c.httpClient, url,
+	client := connect.NewClient[dynamicpb.Message, deferredMessage](c.httpClient, c.addr.JoinPath(method).String(),
 		connect.WithCodec(protoCodec{}),
 		connect.WithGRPCWeb(),
 	)
@@ -190,11 +247,7 @@ func (c *client) Stream(method string, req, params sobek.Value) (*sobek.Object, 
 		return nil, fmt.Errorf("request cannot be nil")
 	}
 
-	url, err := url.JoinPath(c.addr, method)
-	if err != nil {
-		return nil, err
-	}
-	client := connect.NewClient[dynamicpb.Message, deferredMessage](c.httpClient, url,
+	client := connect.NewClient[dynamicpb.Message, deferredMessage](c.httpClient, c.addr.JoinPath(method).String(),
 		connect.WithCodec(protoCodec{}),
 		connect.WithGRPCWeb(),
 	)
@@ -225,35 +278,13 @@ func (c *client) Close() error {
 	return nil
 }
 
-func (c *client) convertToMethodInfo(fdset *descriptorpb.FileDescriptorSet) ([]methodInfo, error) {
+func (c *client) registerMethods(fdset *descriptorpb.FileDescriptorSet) ([]methodInfo, error) {
 	files, err := protodesc.NewFiles(fdset)
 	if err != nil {
 		return nil, err
 	}
-	var rtn []methodInfo
-	if c.mds == nil {
-		// This allows us to call load() multiple times, without overwriting the
-		// previously loaded definitions.
-		c.mds = make(map[string]protoreflect.MethodDescriptor)
-	}
-	appendMethodInfo := func(
-		fd protoreflect.FileDescriptor,
-		sd protoreflect.ServiceDescriptor,
-		md protoreflect.MethodDescriptor,
-	) {
-		name := fmt.Sprintf("/%s/%s", sd.FullName(), md.Name())
-		c.mds[name] = md
-		rtn = append(rtn, methodInfo{
-			MethodInfo: grpc.MethodInfo{
-				Name:           string(md.Name()),
-				IsClientStream: md.IsStreamingClient(),
-				IsServerStream: md.IsStreamingServer(),
-			},
-			Package:    string(fd.Package()),
-			Service:    string(sd.Name()),
-			FullMethod: name,
-		})
-	}
+
+	var info []methodInfo
 	files.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
 		sds := fd.Services()
 		for i := 0; i < sds.Len(); i++ {
@@ -261,41 +292,56 @@ func (c *client) convertToMethodInfo(fdset *descriptorpb.FileDescriptorSet) ([]m
 			mds := sd.Methods()
 			for j := 0; j < mds.Len(); j++ {
 				md := mds.Get(j)
-				appendMethodInfo(fd, sd, md)
+
+				name := fmt.Sprintf("/%s/%s", sd.FullName(), md.Name())
+				c.mds[name] = md
+				info = append(info, methodInfo{
+					MethodInfo: grpc.MethodInfo{
+						Name:           string(md.Name()),
+						IsClientStream: md.IsStreamingClient(),
+						IsServerStream: md.IsStreamingServer(),
+					},
+					Package:    string(fd.Package()),
+					Service:    string(sd.Name()),
+					FullMethod: name,
+				})
 			}
 		}
-
-		messages := fd.Messages()
-
-		stack := make([]protoreflect.MessageDescriptor, 0, messages.Len())
-		for i := 0; i < messages.Len(); i++ {
-			stack = append(stack, messages.Get(i))
-		}
-
-		for len(stack) > 0 {
-			message := stack[len(stack)-1]
-			stack = stack[:len(stack)-1]
-
-			_, errFind := protoregistry.GlobalTypes.FindMessageByName(message.FullName())
-			if errors.Is(errFind, protoregistry.NotFound) {
-				err = protoregistry.GlobalTypes.RegisterMessage(dynamicpb.NewMessageType(message))
-				if err != nil {
-					return false
-				}
-			}
-
-			nested := message.Messages()
-			for i := 0; i < nested.Len(); i++ {
-				stack = append(stack, nested.Get(i))
-			}
-		}
-
 		return true
 	})
-	if err != nil {
-		return nil, err
+	return info, nil
+}
+
+type connectParams struct {
+	reflect bool
+}
+
+func (c *client) parseConnectParams(params sobek.Value) (connectParams, error) {
+	result := connectParams{
+		reflect: false,
 	}
-	return rtn, nil
+
+	if common.IsNullish(params) {
+		return result, nil
+	}
+
+	rt := c.vu.Runtime()
+	object := params.ToObject(rt)
+
+	for _, k := range object.Keys() {
+		v := object.Get(k).Export()
+
+		switch k {
+		case "reflect":
+			var ok bool
+			result.reflect, ok = v.(bool)
+			if !ok {
+				return result, errors.New("reflect value must be boolean")
+			}
+		}
+	}
+
+	return result, nil
 }
 
 func (c *client) buildRequest(md protoreflect.MethodDescriptor, req sobek.Value, params sobek.Value) (*connect.Request[dynamicpb.Message], error) {
@@ -316,14 +362,15 @@ func (c *client) buildRequest(md protoreflect.MethodDescriptor, req sobek.Value,
 	if params != nil {
 		paramsObject := params.ToObject(rt)
 		for _, k := range paramsObject.Keys() {
+			v := paramsObject.Get(k)
+
 			switch k {
 			case "metadata":
-				val := paramsObject.Get(k)
-				if common.IsNullish(val) {
+				if common.IsNullish(v) {
 					break
 				}
 
-				headers, ok := val.Export().(map[string]any)
+				headers, ok := v.Export().(map[string]any)
 				if !ok {
 					return nil, fmt.Errorf("metadata must be an object with key-value pairs")
 				}

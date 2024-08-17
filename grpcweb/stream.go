@@ -70,7 +70,6 @@ type stream struct {
 	tq             *taskqueue.TaskQueue
 
 	stream *connect.ServerStreamForClient[deferredMessage]
-	done   chan struct{}
 }
 
 func (s *stream) On(eventType string, handler func(sobek.Value) (sobek.Value, error)) {

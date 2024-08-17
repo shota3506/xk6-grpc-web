@@ -16,4 +16,4 @@ COPY --from=build /bin/server /bin/
 
 EXPOSE 50051
 
-ENTRYPOINT [ "/bin/server" ]
+ENTRYPOINT [ "/bin/server", "--reflect" ]
