@@ -29,3 +29,13 @@ lint:
 clean:
 	echo "Cleaning up..."
 	rm -f ./k6
+
+## run-server: Starts the example server.
+.PHONY: run-server
+run-server:
+	docker compose -f examples/server/compose.yaml up -d
+
+## stop-server: Stops the example server.
+.PHONY: stop-server
+stop-server:
+	docker compose -f examples/server/compose.yaml down
