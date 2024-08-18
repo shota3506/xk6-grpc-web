@@ -97,6 +97,8 @@ func (c *client) Load(importPaths []string, filenames ...string) ([]methodInfo, 
 }
 
 func (c *client) Connect(addr string, params sobek.Value) (bool, error) {
+	ctx := c.vu.Context()
+
 	if state := c.vu.State(); state == nil {
 		return false, common.NewInitContextError("connecting to a gRPC Web server in the init context is not supported")
 	}
@@ -123,7 +125,7 @@ func (c *client) Connect(addr string, params sobek.Value) (bool, error) {
 		return true, nil
 	}
 
-	fdset, err := c.reflectServer(c.addr)
+	fdset, err := c.reflectServer(ctx, c.addr)
 	if err != nil {
 		return false, err
 	}
@@ -135,7 +137,7 @@ func (c *client) Connect(addr string, params sobek.Value) (bool, error) {
 	return true, nil
 }
 
-func (c *client) reflectServer(addr *url.URL) (*descriptorpb.FileDescriptorSet, error) {
+func (c *client) reflectServer(ctx context.Context, addr *url.URL) (*descriptorpb.FileDescriptorSet, error) {
 	// use HTTP2 transport because gRPC server reflection service provides bidirectional streaming RPC
 	transport := &http2.Transport{}
 	if addr.Scheme != "https" {
@@ -152,7 +154,7 @@ func (c *client) reflectServer(addr *url.URL) (*descriptorpb.FileDescriptorSet, 
 		connect.WithGRPCWeb(),
 	)
 
-	stream := client.NewStream(context.Background())
+	stream := client.NewStream(ctx)
 	defer stream.Close()
 
 	names, err := stream.ListServices()
