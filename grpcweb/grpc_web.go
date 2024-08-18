@@ -22,7 +22,7 @@ func (m *RootModule) NewModuleInstance(vu modules.VU) modules.Instance {
 	exports := make(map[string]any)
 	exports["Client"] = func(_ sobek.ConstructorCall) *sobek.Object {
 		rt := vu.Runtime()
-		return rt.ToValue(newClient(vu)).ToObject(rt)
+		return rt.ToValue(newClient(vu, metrics)).ToObject(rt)
 	}
 	rt := vu.Runtime()
 	exports["StatusOK"] = rt.ToValue(codes.OK)

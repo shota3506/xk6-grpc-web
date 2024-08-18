@@ -4,12 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/grafana/sobek"
 	"github.com/mstoykov/k6-taskqueue-lib/taskqueue"
 	"go.k6.io/k6/js/common"
 	"go.k6.io/k6/js/modules"
+	"go.k6.io/k6/metrics"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
@@ -62,7 +64,8 @@ func (els *eventListeners) all(eventType string) func(yield func(int, func(sobek
 }
 
 type stream struct {
-	vu modules.VU
+	vu      modules.VU
+	metrics *instanceMetrics
 
 	client         *connect.Client[dynamicpb.Message, deferredMessage]
 	md             protoreflect.MethodDescriptor
@@ -90,6 +93,14 @@ func (s *stream) begin(req *connect.Request[dynamicpb.Message]) error {
 		return err
 	}
 	s.stream = stream
+
+	metrics.PushIfNotDone(s.vu.Context(), s.vu.State().Samples, metrics.Sample{
+		TimeSeries: metrics.TimeSeries{
+			Metric: s.metrics.streams,
+		},
+		Time:  time.Now(),
+		Value: 1,
+	})
 
 	// start goroutine to handle stream events
 	go func() {
@@ -124,6 +135,14 @@ func (s *stream) begin(req *connect.Request[dynamicpb.Message]) error {
 }
 
 func (s *stream) queueCallback(message any) {
+	metrics.PushIfNotDone(s.vu.Context(), s.vu.State().Samples, metrics.Sample{
+		TimeSeries: metrics.TimeSeries{
+			Metric: s.metrics.streamsMessagesReceived,
+		},
+		Time:  time.Now(),
+		Value: 1,
+	})
+
 	s.tq.Queue(func() (err error) {
 		rt := s.vu.Runtime()
 		s.eventListeners.all(eventTypeData)(func(i int, f func(sobek.Value) (sobek.Value, error)) bool {

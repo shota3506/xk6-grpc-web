@@ -40,7 +40,8 @@ type methodInfo struct {
 }
 
 type client struct {
-	vu modules.VU
+	vu      modules.VU
+	metrics *instanceMetrics
 
 	// load
 	mds map[string]protoreflect.MethodDescriptor
@@ -50,10 +51,11 @@ type client struct {
 	httpClient *http.Client
 }
 
-func newClient(vu modules.VU) *client {
+func newClient(vu modules.VU, metrics *instanceMetrics) *client {
 	return &client{
-		vu:  vu,
-		mds: make(map[string]protoreflect.MethodDescriptor),
+		vu:      vu,
+		metrics: metrics,
+		mds:     make(map[string]protoreflect.MethodDescriptor),
 	}
 }
 
@@ -260,6 +262,7 @@ func (c *client) Stream(method string, req, params sobek.Value) (*sobek.Object, 
 
 	s := &stream{
 		vu:             c.vu,
+		metrics:        c.metrics,
 		client:         client,
 		md:             md,
 		eventListeners: newEventListeners(),
