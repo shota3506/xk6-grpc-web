@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package weather;
+
+option go_package = "./weather";
+
+service WeatherService {
+  rpc GetWeather(LocationRequest) returns (WeatherResponse);
+  rpc StreamWeather(LocationRequest) returns (stream WeatherResponse);
+}
+
+message LocationRequest {
+  double latitude = 1;
+  double longitude = 2;
+}
+
+message WeatherResponse {
+  double temperature = 1;
+  double humidity = 2;
+  string status = 3;
+}
