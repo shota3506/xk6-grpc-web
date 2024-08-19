@@ -1,0 +1,32 @@
+name: Build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    services:
+      dind:
+        image: docker:23.0-rc-dind-rootless
+        ports:
+        - 2375:2375
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: './go.mod'
+    - name: Install tools
+      run: |
+        go install go.k6.io/xk6/cmd/xk6@v0.12.2
+    - name: Build
+      run: go build -v ./...
+    - name: Lint
+      run: go vet -v ./...
+    - name: Test
+      run: go test -v --shuffle on -race ./...
+    - name: Build k6
+      run: xk6 build --with $(go list -m)=.

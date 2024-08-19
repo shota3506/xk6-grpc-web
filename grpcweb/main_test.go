@@ -76,6 +76,7 @@ func TestMain(m *testing.M) {
 		Mounts: []string{
 			pwd + "/internal/envoy/envoy.yaml:/etc/envoy/envoy.yaml",
 		},
+		ExtraHosts: []string{"host.docker.internal:host-gateway"},
 	}
 
 	resource, err := pool.RunWithOptions(runOptions,
