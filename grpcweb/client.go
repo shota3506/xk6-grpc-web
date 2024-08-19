@@ -192,11 +192,6 @@ func (c *client) Invoke(method string, req sobek.Value, params sobek.Value) (*in
 		return nil, fmt.Errorf("request cannot be nil")
 	}
 
-	client := connect.NewClient[dynamicpb.Message, deferredMessage](c.httpClient, c.addr.JoinPath(method).String(),
-		connect.WithCodec(protoCodec{}),
-		connect.WithGRPCWeb(),
-	)
-
 	connectReq, err := c.buildRequest(md, req, params)
 	if err != nil {
 		return nil, err
@@ -204,20 +199,7 @@ func (c *client) Invoke(method string, req sobek.Value, params sobek.Value) (*in
 
 	ctx := c.vu.Context()
 
-	beginTime := time.Now()
-	resp, err := client.CallUnary(ctx, connectReq)
-	endTime := time.Now()
-
-	// push metrics
-	state := c.vu.State()
-	metrics.PushIfNotDone(ctx, state.Samples, metrics.Sample{
-		TimeSeries: metrics.TimeSeries{
-			Metric: state.BuiltinMetrics.GRPCReqDuration,
-		},
-		Time:  endTime,
-		Value: metrics.D(endTime.Sub(beginTime)),
-	})
-
+	resp, err := c.callUnary(ctx, method, connectReq)
 	if err != nil {
 		var connectErr *connect.Error
 		if errors.As(err, &connectErr) {
@@ -240,6 +222,87 @@ func (c *client) Invoke(method string, req sobek.Value, params sobek.Value) (*in
 		Trailer: resp.Trailer(),
 		Message: message,
 	}, nil
+}
+
+func (c *client) AsyncInvoke(method string, req sobek.Value, params sobek.Value) *sobek.Promise {
+	promise, resolve, reject := c.vu.Runtime().NewPromise()
+
+	md, ok := c.mds[method]
+	if !ok {
+		reject(fmt.Errorf("method %s not found in file descriptors", method))
+		return promise
+	}
+	if req == nil {
+		reject(fmt.Errorf("request cannot be nil"))
+		return promise
+	}
+
+	connectReq, err := c.buildRequest(md, req, params)
+	if err != nil {
+		reject(err)
+		return promise
+	}
+
+	callback := c.vu.RegisterCallback()
+
+	ctx := c.vu.Context()
+	go func() {
+		resp, err := c.callUnary(ctx, method, connectReq)
+
+		callback(func() error {
+			if err != nil {
+				var connectErr *connect.Error
+				if errors.As(err, &connectErr) {
+					resolve(&invokeResponse{
+						Error:        connectErr.Message(),
+						ErrorDetails: connectErr.Details(),
+						Status:       codes.Code(uint32(connectErr.Code())),
+					})
+					return nil
+				}
+				reject(err)
+				return nil // do not return error
+			}
+
+			message, err := convertMessageToJSON(md, resp.Msg.data)
+			if err != nil {
+				reject(err)
+				return nil // do not return error
+			}
+
+			resolve(&invokeResponse{
+				Header:  resp.Header(),
+				Trailer: resp.Trailer(),
+				Message: message,
+			})
+			return nil
+		})
+	}()
+
+	return promise
+}
+
+func (c *client) callUnary(ctx context.Context, method string, req *connect.Request[dynamicpb.Message]) (*connect.Response[deferredMessage], error) {
+	client := connect.NewClient[dynamicpb.Message, deferredMessage](c.httpClient, c.addr.JoinPath(method).String(),
+		connect.WithCodec(protoCodec{}),
+		connect.WithGRPCWeb(),
+	)
+
+	beginTime := time.Now()
+	resp, err := client.CallUnary(ctx, req)
+	endTime := time.Now()
+
+	// push metrics
+	state := c.vu.State()
+	metrics.PushIfNotDone(ctx, state.Samples, metrics.Sample{
+		TimeSeries: metrics.TimeSeries{
+			Metric: state.BuiltinMetrics.GRPCReqDuration,
+		},
+		Time:  endTime,
+		Value: metrics.D(endTime.Sub(beginTime)),
+	})
+
+	return resp, err
 }
 
 func (c *client) Stream(method string, req, params sobek.Value) (*sobek.Object, error) {
