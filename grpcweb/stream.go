@@ -64,8 +64,9 @@ func (els *eventListeners) all(eventType string) func(yield func(int, func(sobek
 }
 
 type stream struct {
-	vu      modules.VU
-	metrics *instanceMetrics
+	vu          modules.VU
+	metrics     *instanceMetrics
+	tagsAndMeta *metrics.TagsAndMeta
 
 	client         *connect.Client[dynamicpb.Message, deferredMessage]
 	md             protoreflect.MethodDescriptor
@@ -97,9 +98,11 @@ func (s *stream) begin(req *connect.Request[dynamicpb.Message]) error {
 	metrics.PushIfNotDone(s.vu.Context(), s.vu.State().Samples, metrics.Sample{
 		TimeSeries: metrics.TimeSeries{
 			Metric: s.metrics.streams,
+			Tags:   s.tagsAndMeta.Tags,
 		},
-		Time:  time.Now(),
-		Value: 1,
+		Time:     time.Now(),
+		Metadata: s.tagsAndMeta.Metadata,
+		Value:    1,
 	})
 
 	// start goroutine to handle stream events
@@ -138,9 +141,11 @@ func (s *stream) queueCallback(message any) {
 	metrics.PushIfNotDone(s.vu.Context(), s.vu.State().Samples, metrics.Sample{
 		TimeSeries: metrics.TimeSeries{
 			Metric: s.metrics.streamsMessagesReceived,
+			Tags:   s.tagsAndMeta.Tags,
 		},
-		Time:  time.Now(),
-		Value: 1,
+		Time:     time.Now(),
+		Metadata: s.tagsAndMeta.Metadata,
+		Value:    1,
 	})
 
 	s.tq.Queue(func() (err error) {

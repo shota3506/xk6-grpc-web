@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -192,14 +193,15 @@ func (c *client) Invoke(method string, req sobek.Value, params sobek.Value) (*in
 		return nil, fmt.Errorf("request cannot be nil")
 	}
 
-	connectReq, err := c.buildRequest(md, req, params)
+	connectReq, ctm, err := c.buildRequest(md, req, params)
 	if err != nil {
 		return nil, err
 	}
+	c.setSystemTags(ctm, c.addr, method)
 
 	ctx := c.vu.Context()
 
-	resp, err := c.callUnary(ctx, method, connectReq)
+	resp, err := c.callUnary(ctx, method, connectReq, ctm)
 	if err != nil {
 		var connectErr *connect.Error
 		if errors.As(err, &connectErr) {
@@ -237,17 +239,18 @@ func (c *client) AsyncInvoke(method string, req sobek.Value, params sobek.Value)
 		return promise
 	}
 
-	connectReq, err := c.buildRequest(md, req, params)
+	connectReq, ctm, err := c.buildRequest(md, req, params)
 	if err != nil {
 		reject(err)
 		return promise
 	}
+	c.setSystemTags(ctm, c.addr, method)
 
 	callback := c.vu.RegisterCallback()
 
 	ctx := c.vu.Context()
 	go func() {
-		resp, err := c.callUnary(ctx, method, connectReq)
+		resp, err := c.callUnary(ctx, method, connectReq, ctm)
 
 		callback(func() error {
 			if err != nil {
@@ -282,7 +285,7 @@ func (c *client) AsyncInvoke(method string, req sobek.Value, params sobek.Value)
 	return promise
 }
 
-func (c *client) callUnary(ctx context.Context, method string, req *connect.Request[dynamicpb.Message]) (*connect.Response[deferredMessage], error) {
+func (c *client) callUnary(ctx context.Context, method string, req *connect.Request[dynamicpb.Message], ctm *metrics.TagsAndMeta) (*connect.Response[deferredMessage], error) {
 	client := connect.NewClient[dynamicpb.Message, deferredMessage](c.httpClient, c.addr.JoinPath(method).String(),
 		connect.WithCodec(protoCodec{}),
 		connect.WithGRPCWeb(),
@@ -297,9 +300,11 @@ func (c *client) callUnary(ctx context.Context, method string, req *connect.Requ
 	metrics.PushIfNotDone(ctx, state.Samples, metrics.Sample{
 		TimeSeries: metrics.TimeSeries{
 			Metric: state.BuiltinMetrics.GRPCReqDuration,
+			Tags:   ctm.Tags,
 		},
-		Time:  endTime,
-		Value: metrics.D(endTime.Sub(beginTime)),
+		Time:     endTime,
+		Metadata: ctm.Metadata,
+		Value:    metrics.D(endTime.Sub(beginTime)),
 	})
 
 	return resp, err
@@ -320,14 +325,16 @@ func (c *client) Stream(method string, req, params sobek.Value) (*sobek.Object, 
 		connect.WithGRPCWeb(),
 	)
 
-	connectReq, err := c.buildRequest(md, req, params)
+	connectReq, ctm, err := c.buildRequest(md, req, params)
 	if err != nil {
 		return nil, err
 	}
+	c.setSystemTags(ctm, c.addr, method)
 
 	s := &stream{
 		vu:             c.vu,
 		metrics:        c.metrics,
+		tagsAndMeta:    ctm,
 		client:         client,
 		md:             md,
 		eventListeners: newEventListeners(),
@@ -413,20 +420,18 @@ func (c *client) parseConnectParams(params sobek.Value) (connectParams, error) {
 	return result, nil
 }
 
-func (c *client) buildRequest(md protoreflect.MethodDescriptor, req sobek.Value, params sobek.Value) (*connect.Request[dynamicpb.Message], error) {
+type callParams struct {
+	metadata    http.Header
+	tagsAndMeta metrics.TagsAndMeta
+}
+
+func (c *client) parseCallParams(params sobek.Value) (callParams, error) {
 	rt := c.vu.Runtime()
 
-	b, err := req.ToObject(rt).MarshalJSON()
-	if err != nil {
-		return nil, err
+	result := callParams{
+		metadata:    http.Header{},
+		tagsAndMeta: c.vu.State().Tags.GetCurrentValues(),
 	}
-	reqdm := dynamicpb.NewMessage(md.Input())
-	err = protojson.Unmarshal(b, reqdm)
-	if err != nil {
-		return nil, err
-	}
-
-	r := connect.NewRequest(reqdm)
 
 	if params != nil {
 		paramsObject := params.ToObject(rt)
@@ -439,24 +444,67 @@ func (c *client) buildRequest(md protoreflect.MethodDescriptor, req sobek.Value,
 					break
 				}
 
-				headers, ok := v.Export().(map[string]any)
+				metadata, ok := v.Export().(map[string]any)
 				if !ok {
-					return nil, fmt.Errorf("metadata must be an object with key-value pairs")
+					return callParams{}, fmt.Errorf("metadata must be an object with key-value pairs")
 				}
-
-				for hk, hv := range headers {
+				for hk, hv := range metadata {
 					// TODO: support Binary-valued keys
 					value, ok := hv.(string)
 					if !ok {
-						return nil, fmt.Errorf("%s value must be string", hk)
+						return callParams{}, fmt.Errorf("%s value must be string", hk)
 					}
-					r.Header()[hk] = append(r.Header()[hk], value)
+					result.metadata[hk] = append(result.metadata[hk], value)
+				}
+			case "tags":
+				if err := common.ApplyCustomUserTags(rt, &result.tagsAndMeta, paramsObject.Get(k)); err != nil {
+					return result, fmt.Errorf("metric tags: %w", err)
 				}
 			}
 		}
 	}
+	return result, nil
+}
 
-	return r, nil
+func (c *client) buildRequest(md protoreflect.MethodDescriptor, req sobek.Value, params sobek.Value) (*connect.Request[dynamicpb.Message], *metrics.TagsAndMeta, error) {
+	rt := c.vu.Runtime()
+
+	b, err := req.ToObject(rt).MarshalJSON()
+	if err != nil {
+		return nil, nil, err
+	}
+	reqdm := dynamicpb.NewMessage(md.Input())
+	err = protojson.Unmarshal(b, reqdm)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	r := connect.NewRequest(reqdm)
+
+	p, err := c.parseCallParams(params)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// headers
+	for k, v := range p.metadata {
+		r.Header()[k] = v
+	}
+
+	return r, &p.tagsAndMeta, nil
+}
+
+func (c *client) setSystemTags(ctm *metrics.TagsAndMeta, addr *url.URL, method string) {
+	state := c.vu.State()
+	if state.Options.SystemTags.Has(metrics.TagURL) {
+		ctm.SetSystemTagOrMeta(metrics.TagURL, addr.JoinPath(method).String())
+	}
+
+	parts := strings.Split(method[1:], "/")
+	if len(parts) == 2 {
+		ctm.SetSystemTagOrMetaIfEnabled(state.Options.SystemTags, metrics.TagService, parts[0])
+		ctm.SetSystemTagOrMetaIfEnabled(state.Options.SystemTags, metrics.TagMethod, parts[1])
+	}
 }
 
 func walkFileDescriptors(seen map[string]struct{}, fd *desc.FileDescriptor) []*descriptorpb.FileDescriptorProto {

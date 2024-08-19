@@ -61,10 +61,12 @@ if (resp.status !== grpcweb.StatusOK) {
 			_, err = runtime.VU.Runtime().RunString(replacer.Replace(tt.initCode))
 			require.NoError(t, err)
 
+			registry := metrics.NewRegistry()
 			runtime.MoveToVUContext(&lib.State{
 				Samples:        make(chan metrics.SampleContainer, 1e4),
 				Dialer:         &net.Dialer{},
-				BuiltinMetrics: metrics.RegisterBuiltinMetrics(metrics.NewRegistry()),
+				BuiltinMetrics: metrics.RegisterBuiltinMetrics(registry),
+				Tags:           lib.NewVUStateTags(registry.RootTagSet()),
 				Logger:         noopLogger,
 			})
 
