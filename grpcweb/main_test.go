@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,8 +17,11 @@ import (
 	"github.com/ory/dockertest/docker"
 	"github.com/sirupsen/logrus"
 	"go.k6.io/k6/js/modulestest"
+	"go.k6.io/k6/lib"
 	"go.k6.io/k6/lib/fsext"
+	"go.k6.io/k6/metrics"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 
 	weatherpb "github.com/shota3506/xk6-grpc-web/grpcweb/internal/grpc/weather"
 	"github.com/shota3506/xk6-grpc-web/grpcweb/internal/grpc/weatherstub"
@@ -47,6 +51,7 @@ func TestMain(m *testing.M) {
 
 	server := grpc.NewServer()
 	weatherpb.RegisterWeatherServiceServer(server, weatherServiceServer)
+	reflection.Register(server)
 
 	go func() {
 		if err := server.Serve(lis); err != nil {
@@ -126,4 +131,26 @@ func newRuntime(t *testing.T) (*modulestest.Runtime, error) {
 	runtime.VU.InitEnvField.FileSystems = map[string]fsext.Fs{"file": fs}
 
 	return runtime, nil
+}
+
+func moveToExecutionPhase(runtime *modulestest.Runtime) {
+	registry := metrics.NewRegistry()
+	runtime.MoveToVUContext(&lib.State{
+		Samples:        make(chan metrics.SampleContainer, 1e4),
+		Dialer:         &net.Dialer{},
+		BuiltinMetrics: metrics.RegisterBuiltinMetrics(registry),
+		Tags:           lib.NewVUStateTags(registry.RootTagSet()),
+		Logger:         noopLogger,
+	})
+}
+
+type callRecorder struct {
+	sync.Mutex
+	calls []string
+}
+
+func (r *callRecorder) call(text string) {
+	r.Lock()
+	defer r.Unlock()
+	r.calls = append(r.calls, text)
 }
