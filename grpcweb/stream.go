@@ -1,6 +1,7 @@
 package grpcweb
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -74,6 +75,8 @@ type stream struct {
 	tq             *taskqueue.TaskQueue
 
 	stream *connect.ServerStreamForClient[deferredMessage]
+
+	cancel context.CancelFunc
 }
 
 func (s *stream) On(eventType string, handler func(sobek.Value) (sobek.Value, error)) {
@@ -86,9 +89,7 @@ func (s *stream) On(eventType string, handler func(sobek.Value) (sobek.Value, er
 	}
 }
 
-func (s *stream) begin(req *connect.Request[dynamicpb.Message]) error {
-	ctx := s.vu.Context()
-
+func (s *stream) begin(ctx context.Context, req *connect.Request[dynamicpb.Message]) error {
 	stream, err := s.client.CallServerStream(ctx, req)
 	if err != nil {
 		return err
@@ -197,4 +198,8 @@ func (s *stream) queueClose() {
 		})
 		return
 	})
+
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
