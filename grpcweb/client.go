@@ -127,7 +127,7 @@ func (c *client) Connect(addr string, params sobek.Value) (bool, error) {
 		return true, nil
 	}
 
-	fdset, err := c.reflectServer(ctx, c.addr)
+	fdset, err := c.reflectServer(ctx, c.addr, p.metadata)
 	if err != nil {
 		return false, err
 	}
@@ -139,7 +139,7 @@ func (c *client) Connect(addr string, params sobek.Value) (bool, error) {
 	return true, nil
 }
 
-func (c *client) reflectServer(ctx context.Context, addr *url.URL) (*descriptorpb.FileDescriptorSet, error) {
+func (c *client) reflectServer(ctx context.Context, addr *url.URL, header http.Header) (*descriptorpb.FileDescriptorSet, error) {
 	// use HTTP2 transport because gRPC server reflection service provides bidirectional streaming RPC
 	transport := &http2.Transport{}
 	if addr.Scheme != "https" {
@@ -156,7 +156,12 @@ func (c *client) reflectServer(ctx context.Context, addr *url.URL) (*descriptorp
 		connect.WithGRPCWeb(),
 	)
 
-	stream := client.NewStream(ctx)
+	opts := []grpcreflect.ClientStreamOption{}
+	if header != nil {
+		opts = append(opts, grpcreflect.WithRequestHeaders(header))
+	}
+
+	stream := client.NewStream(ctx, opts...)
 	defer stream.Close()
 
 	names, err := stream.ListServices()
@@ -410,7 +415,8 @@ func (c *client) registerMethods(fdset *descriptorpb.FileDescriptorSet) ([]metho
 }
 
 type connectParams struct {
-	reflect bool
+	metadata http.Header
+	reflect  bool
 }
 
 func (c *client) parseConnectParams(params sobek.Value) (connectParams, error) {
@@ -423,17 +429,34 @@ func (c *client) parseConnectParams(params sobek.Value) (connectParams, error) {
 	}
 
 	rt := c.vu.Runtime()
-	object := params.ToObject(rt)
+	paramsObject := params.ToObject(rt)
 
-	for _, k := range object.Keys() {
-		v := object.Get(k).Export()
+	for _, k := range paramsObject.Keys() {
+		v := paramsObject.Get(k)
 
 		switch k {
 		case "reflect":
 			var ok bool
-			result.reflect, ok = v.(bool)
+			result.reflect, ok = v.Export().(bool)
 			if !ok {
 				return result, errors.New("reflect value must be boolean")
+			}
+		case "metadata":
+			if common.IsNullish(v) {
+				break
+			}
+
+			metadata, ok := v.Export().(map[string]any)
+			if !ok {
+				return connectParams{}, fmt.Errorf("metadata must be an object with key-value pairs")
+			}
+			for hk, hv := range metadata {
+				// TODO: support Binary-valued keys
+				value, ok := hv.(string)
+				if !ok {
+					return connectParams{}, fmt.Errorf("%s value must be string", hk)
+				}
+				result.metadata[hk] = append(result.metadata[hk], value)
 			}
 		}
 	}
