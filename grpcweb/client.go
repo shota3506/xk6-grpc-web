@@ -421,7 +421,8 @@ type connectParams struct {
 
 func (c *client) parseConnectParams(params sobek.Value) (connectParams, error) {
 	result := connectParams{
-		reflect: false,
+		metadata: http.Header{},
+		reflect:  false,
 	}
 
 	if common.IsNullish(params) {
