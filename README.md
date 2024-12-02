@@ -1,5 +1,8 @@
 # xk6-grpc-web
 
+[![Build](https://github.com/shota3506/xk6-grpc-web/actions/workflows/build.yaml/badge.svg)](https://github.com/shota3506/xk6-grpc-web/actions/workflows/build.yaml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/shota3506/xk6-grpc-web)](https://goreportcard.com/report/github.com/shota3506/xk6-grpc-web)
+
 xk6-grpc-web is a [k6](https://k6.io/) extension that supports [gRPC-Web](https://grpc.io/docs/platforms/web/) protocol.
 
 ## Build
