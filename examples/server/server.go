@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"time"
 
 	helloworldpb "github.com/shota3506/xk6-grpc-web-example/helloworld"
@@ -14,6 +15,7 @@ type server struct {
 }
 
 func (s *server) SayHello(_ context.Context, req *helloworldpb.HelloRequest) (*helloworldpb.HelloReply, error) {
+	time.Sleep(time.Duration(rand.N(500)) * time.Millisecond)
 	return &helloworldpb.HelloReply{
 		Message: fmt.Sprintf("Hello! %s", req.GetName()),
 	}, nil
@@ -24,7 +26,7 @@ func (s *server) SayRepeatHello(req *helloworldpb.RepeatHelloRequest, stream grp
 		stream.Send(&helloworldpb.HelloReply{
 			Message: fmt.Sprintf("Hello! %s%d", req.GetName(), i),
 		})
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(time.Duration(rand.N(500)) * time.Millisecond)
 	}
 	return nil
 }
