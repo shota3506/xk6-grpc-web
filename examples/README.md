@@ -19,11 +19,11 @@ $ docker compose -f ./server/compose.yaml up
 ### Unary RPC
 
 ```
-$ k6 run ./unary.js -d 10s
+$ ./k6 run ./unary.js -d 10s
 ```
 
 ### Server streaming RPC
 
 ```
-$ k6 run ./server_streaming.js -d 10s
+$ ./k6 run ./server_streaming.js -d 10s
 ```
