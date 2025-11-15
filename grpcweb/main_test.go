@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ory/dockertest"
-	"github.com/ory/dockertest/docker"
+	"github.com/ory/dockertest/v3"
+	"github.com/ory/dockertest/v3/docker"
 	"github.com/sirupsen/logrus"
 	"go.k6.io/k6/js/modulestest"
 	"go.k6.io/k6/lib"
