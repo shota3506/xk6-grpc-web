@@ -15,13 +15,13 @@ jobs:
         ports:
         - 2375:2375
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-go@v5
+    - uses: actions/checkout@v5
+    - uses: actions/setup-go@v6
       with:
-        go-version-file: './go.mod'
+        go-version: '1.25'
     - name: Install tools
       run: |
-        go install go.k6.io/xk6/cmd/xk6@v0.12.2
+        go install go.k6.io/xk6/cmd/xk6@v1.2.6
     - name: Build
       run: go build -v ./...
     - name: Lint
