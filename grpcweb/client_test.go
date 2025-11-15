@@ -32,7 +32,7 @@ func TestClient(t *testing.T) {
 			},
 			initCode: `
 let client = new grpcweb.Client();
-client.load([], "./internal/grpc/weather/weather_service.proto");
+client.load(["./internal/grpc/weather"], "weather_service.proto");
 `,
 			code: `
 client.connect("GRPC_WEB_ADDR");
@@ -51,7 +51,7 @@ if (resp.status !== grpcweb.StatusOK) {
 			},
 			initCode: `
 let client = new grpcweb.Client();
-client.load([], "./internal/grpc/weather/weather_service.proto");
+client.load(["./internal/grpc/weather"], "weather_service.proto");
 `,
 			code: `
 client.connect("GRPC_WEB_ADDR");
@@ -96,7 +96,7 @@ if (resp.status !== grpcweb.StatusOK) {
 			},
 			initCode: `
 let client = new grpcweb.Client();
-client.load([], "./internal/grpc/weather/weather_service.proto");
+client.load(["./internal/grpc/weather"], "weather_service.proto");
 `,
 			code: `
 client.connect("GRPC_WEB_ADDR");
