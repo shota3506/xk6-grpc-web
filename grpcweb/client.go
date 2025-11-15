@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -15,9 +16,8 @@ import (
 
 	"connectrpc.com/connect"
 	"connectrpc.com/grpcreflect"
+	"github.com/bufbuild/protocompile"
 	"github.com/grafana/sobek"
-	"github.com/jhump/protoreflect/desc"
-	"github.com/jhump/protoreflect/desc/protoparse"
 	"github.com/mstoykov/k6-taskqueue-lib/taskqueue"
 	"go.k6.io/k6/js/common"
 	"go.k6.io/k6/js/modules"
@@ -75,16 +75,19 @@ func (c *client) Load(importPaths []string, filenames ...string) ([]methodInfo, 
 		importPaths = append(importPaths, initEnv.CWD.Path)
 	}
 
-	parser := protoparse.Parser{
-		ImportPaths:      importPaths,
-		InferImportPaths: false,
-		Accessor: protoparse.FileAccessor(func(filename string) (io.ReadCloser, error) {
+	resolver := protocompile.WithStandardImports(&protocompile.SourceResolver{
+		ImportPaths: importPaths,
+		Accessor: func(filename string) (io.ReadCloser, error) {
 			absFilePath := initEnv.GetAbsFilePath(filename)
 			return initEnv.FileSystems["file"].Open(absFilePath)
-		}),
+		},
+	})
+
+	compiler := protocompile.Compiler{
+		Resolver: resolver,
 	}
 
-	fds, err := parser.ParseFiles(filenames...)
+	fds, err := compiler.Compile(c.vu.Context(), filenames...)
 	if err != nil {
 		return nil, err
 	}
@@ -540,9 +543,7 @@ func (c *client) buildRequest(md protoreflect.MethodDescriptor, req sobek.Value,
 	}
 
 	// headers
-	for k, v := range p.metadata {
-		r.Header()[k] = v
-	}
+	maps.Copy(r.Header(), p.metadata)
 
 	return r, &p.tagsAndMeta, p.timeout, nil
 }
@@ -560,16 +561,18 @@ func (c *client) setSystemTags(ctm *metrics.TagsAndMeta, addr *url.URL, method s
 	}
 }
 
-func walkFileDescriptors(seen map[string]struct{}, fd *desc.FileDescriptor) []*descriptorpb.FileDescriptorProto {
+func walkFileDescriptors(seen map[string]struct{}, fd protoreflect.FileDescriptor) []*descriptorpb.FileDescriptorProto {
 	fds := []*descriptorpb.FileDescriptorProto{}
 
-	if _, ok := seen[fd.GetName()]; ok {
+	if _, ok := seen[fd.Path()]; ok {
 		return fds
 	}
-	seen[fd.GetName()] = struct{}{}
-	fds = append(fds, fd.AsFileDescriptorProto())
+	seen[fd.Path()] = struct{}{}
+	fds = append(fds, protodesc.ToFileDescriptorProto(fd))
 
-	for _, dep := range fd.GetDependencies() {
+	imports := fd.Imports()
+	for i := 0; i < imports.Len(); i++ {
+		dep := imports.Get(i).FileDescriptor
 		deps := walkFileDescriptors(seen, dep)
 		fds = append(fds, deps...)
 	}
