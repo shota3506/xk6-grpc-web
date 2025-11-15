@@ -42,6 +42,7 @@ static_resources:
     - name: weather_service
       connect_timeout: 0.25s
       type: logical_dns
+      dns_lookup_family: V4_ONLY
       # HTTP/2 support
       typed_extension_protocol_options:
         envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
