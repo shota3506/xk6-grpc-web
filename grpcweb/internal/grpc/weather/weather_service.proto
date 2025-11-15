@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package weather;
 
+import "weather_data.proto";
+
 option go_package = "./weather";
 
 service WeatherService {
@@ -15,7 +17,5 @@ message LocationRequest {
 }
 
 message WeatherResponse {
-  double temperature = 1;
-  double humidity = 2;
-  string status = 3;
+  WeatherData data = 1;
 }

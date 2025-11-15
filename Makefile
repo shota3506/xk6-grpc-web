@@ -30,6 +30,15 @@ clean:
 	echo "Cleaning up..."
 	rm -f ./k6
 
+## generate: Generates Go code from proto files.
+.PHONY: generate-proto
+generate-proto:
+	echo "Generating proto code..."
+	protoc -I grpcweb/internal/grpc/weather \
+		--go_out=grpcweb/internal/grpc/weather --go_opt=paths=source_relative \
+		--go-grpc_out=grpcweb/internal/grpc/weather --go-grpc_opt=paths=source_relative \
+		grpcweb/internal/grpc/weather/*.proto
+
 ## run-server: Starts the example server.
 .PHONY: run-server
 run-server:

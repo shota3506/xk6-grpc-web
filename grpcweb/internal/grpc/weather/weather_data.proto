@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package weather;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "./weather";
+
+message WeatherData {
+  double temperature = 1;
+  double humidity = 2;
+  string status = 3;
+  google.protobuf.Timestamp recorded_at = 4;
+}
