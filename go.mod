@@ -13,8 +13,8 @@ require (
 	github.com/stretchr/testify v1.11.1
 	go.k6.io/k6 v1.4.0
 	golang.org/x/net v0.47.0
-	google.golang.org/grpc v1.76.0
-	google.golang.org/protobuf v1.36.10
+	google.golang.org/grpc v1.78.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
